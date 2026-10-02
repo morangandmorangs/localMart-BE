@@ -117,3 +117,4 @@ connectDB().then(() => {
 });
 
 export default app;
+// Note: The server.ts file is the entry point for the backend application. It sets up the Express server, configures middleware, defines routes, and starts listening on the specified port. The code includes health check endpoints, rate limiting for authentication routes, and error handling middleware.
