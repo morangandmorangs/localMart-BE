@@ -53,3 +53,9 @@ coverage/
 .vscode/
 .vscode/settings.json
 skills/
+
+# Firebase service account keys — never commit these
+secrets/
+serviceAccountKey.json
+*serviceAccount*.json
+*firebase-adminsdk*.json

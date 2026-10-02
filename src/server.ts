@@ -4,10 +4,20 @@ import dotenv from "dotenv";
 import connectDB from "./config/dbConnection";
 import rateLimit from "express-rate-limit";
 import corsOptions from "./config/corOptions";
+import initFirebaseAdmin from "./config/firebaseAdmin";
 import { errorHandler, routeNotFound } from "./middleware/errorMiddleware";
 
 //Routes
 import auth from "./routes/Admin/auth";
+import customerRoutes from "./routes/Customer/auth";
+import merchantRoutes from "./routes/Merchant";
+import driverRoutes from "./routes/Driver";
+import seedAdminHandler from "./aPrivilege/seeder";
+import seedCatalogData from "./aPrivilege/catalogSeeder";
+import productRoutes from "./routes/Catalog/products";
+import restaurantRoutes from "./routes/Catalog/restaurants";
+import orderRoutes from "./routes/Order/orders";
+import notificationRoutes from "./routes/notifications";
 
 // Create Express application
 const app: Application = express();
@@ -63,13 +73,41 @@ app.get("/_ah/start", (req: Request, res: Response) => {
 });
 
 // Admin & Auth (rate limiting only on auth)
-app.use("/api/auth", apiLimiter, auth);
+app.use("/api/admin/auth", apiLimiter, auth);
+
+// Seeding mints privileged accounts, so it is rate limited like a login and
+// stays disabled unless ALLOW_ADMIN_SEED=true (enforced in the handler).
+app.post("/api/admin/seed", apiLimiter, seedAdminHandler);
+
+// Actors. Auth-bearing routes are rate limited on the same budget as login.
+app.use("/api/customers", apiLimiter, customerRoutes);
+app.use("/api/merchants", apiLimiter, merchantRoutes);
+app.use("/api/drivers", apiLimiter, driverRoutes);
+
+// Catalogue. Reads are public and un-rate-limited: browsing the aisles is
+// the busiest thing the app does, and a shopper paging through products
+// must not be throttled on the login budget.
+app.use("/api/products", productRoutes);
+app.use("/api/restaurants", restaurantRoutes);
+
+// Orders carry a bearer token on every call, same budget as the actor routes.
+app.use("/api/orders", apiLimiter, orderRoutes);
+
+// Device-token registration for order alerts (Admin / Merchant).
+app.use("/api/notifications", apiLimiter, notificationRoutes);
+
+// Seeding writes to the live catalogue, so it is rate limited and stays
+// disabled unless ALLOW_CATALOG_SEED=true (enforced in the handler).
+app.post("/api/catalog/seed", apiLimiter, seedCatalogData);
 
 // 404 handler
 app.use(routeNotFound);
 
 // Custom error handler
 app.use(errorHandler);
+
+// Firebase Admin (non-fatal: logs and continues if credentials are missing)
+initFirebaseAdmin();
 
 connectDB().then(() => {
   app.listen(PORT, () => {
