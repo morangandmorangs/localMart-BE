@@ -6,6 +6,9 @@
   "author": "Ilix-studio",
   "type": "commonjs",
   "main": "server.js",
+  "engines": {
+    "node": "22.x"
+  },
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",
