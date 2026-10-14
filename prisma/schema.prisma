@@ -1,0 +1,327 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// Status-like columns (profileStatus, provider, category, paymentMethod,
+// status) are plain strings on purpose: their wire values are hyphenated
+// ("pending-documents") and the clients key off them. The app validates them
+// against src/types/*.ts; the migration adds CHECK constraints for the rules
+// that must hold even for writes that skip the app.
+
+model Admin {
+  id          String   @id @default(uuid())
+  name        String
+  email       String   @unique
+  phoneNumber String?  @unique
+  password    String
+  // Constant: an Admin's RBAC role never varies. Seniority is designation.
+  designation String   @default("Manager")
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  deviceTokens DeviceToken[]
+}
+
+model Customer {
+  id          String    @id @default(uuid())
+  // Customers sign in with Firebase phone OTP only — no password by design.
+  firebaseUid String    @unique
+  phoneNumber String    @unique
+  name        String?
+  email       String?
+  area        String?
+  isActive    Boolean   @default(true)
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  addresses Address[]
+  orders    Order[]
+}
+
+model Address {
+  id         String   @id @default(uuid())
+  customerId String
+  label      String
+  line1      String
+  city       String
+  state      String
+  pincode    String
+  createdAt  DateTime @default(now())
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+}
+
+// Merchants and drivers share how they get in (email + password or Google)
+// and the document hold, so the shared columns are repeated on both tables
+// and kept in step by hand.
+model Merchant {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  phoneNumber   String?
+  // Absent on Google-only accounts.
+  password      String?
+  provider      String    @default("password")
+  firebaseUid   String?   @unique
+  profileStatus String    @default("pending-documents")
+  // [{ kind, url, submittedAt }] — an audit trail, only ever read whole.
+  documents     Json      @default("[]")
+  reviewNote    String?
+  reviewedAt    DateTime?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  shopName String?
+  // One or more of: vegetable-vendor | meat-fish-shop | restaurant |
+  // grocery-store | pharmacy | general-store. Chosen at signup; decides what
+  // the merchant may list.
+  businessTypes String[] @default(["general-store"])
+  // Area the shop serves; matched against the served-areas list.
+  area     String?
+  // Whether the shop is taking orders right now (the Shop tab's switch).
+  isOpen   Boolean @default(true)
+
+  orders       Order[]
+  products     Product[]
+  restaurants  Restaurant[]
+  orderItems   OrderItem[]
+  deviceTokens DeviceToken[]
+}
+
+model Driver {
+  id            String    @id @default(uuid())
+  name          String
+  email         String    @unique
+  phoneNumber   String?
+  password      String?
+  provider      String    @default("password")
+  firebaseUid   String?   @unique
+  profileStatus String    @default("pending-documents")
+  documents     Json      @default("[]")
+  reviewNote    String?
+  reviewedAt    DateTime?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  vehicleType   String?
+  vehicleNumber String?
+  // Drivers go off-duty without their profile being withdrawn.
+  isAvailable   Boolean @default(false)
+
+  orders Order[]
+}
+
+// Farmers sign in with a phone OTP, Google, or email + password, and go
+// through the same document hold as merchants and drivers. Email is optional
+// because a phone-OTP account may not have one.
+model Farmer {
+  id            String    @id @default(uuid())
+  name          String
+  email         String?   @unique
+  phoneNumber   String?   @unique
+  password      String?
+  provider      String    @default("password")
+  firebaseUid   String?   @unique
+  profileStatus String    @default("pending-documents")
+  documents     Json      @default("[]")
+  reviewNote    String?
+  reviewedAt    DateTime?
+  isActive      Boolean   @default(true)
+  lastLoginAt   DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Farm address.
+  addressLine String?
+  village     String?
+  district    String?
+  state       String?
+  pincode     String?
+  // Total land, in `landUnit` (acre | hectare | bigha).
+  landSize    Float?
+  landUnit    String  @default("acre")
+
+  crops FarmerCrop[]
+}
+
+// One planting. `expectedHarvestOn` is worked out on the server from the
+// crop's typical days-to-harvest, never taken from the client.
+model FarmerCrop {
+  id                String    @id @default(uuid())
+  farmerId          String
+  // Slug from the crop table (src/types/crop.types.ts).
+  crop              String
+  variety           String?
+  // Land under this crop, in the farmer's landUnit.
+  area              Float?
+  plantedOn         DateTime
+  expectedHarvestOn DateTime
+  harvestedOn       DateTime?
+  createdAt         DateTime  @default(now())
+
+  farmer Farmer @relation(fields: [farmerId], references: [id], onDelete: Cascade)
+
+  @@index([farmerId])
+}
+
+// FCM web-push tokens for order alerts. A token belongs to exactly one
+// admin or merchant (CHECK in the migration); a device that signs in as
+// someone else is re-assigned rather than duplicated.
+model DeviceToken {
+  id         String   @id @default(uuid())
+  token      String   @unique
+  adminId    String?
+  merchantId String?
+  createdAt  DateTime @default(now())
+
+  admin    Admin?    @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  merchant Merchant? @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  @@index([adminId, createdAt])
+  @@index([merchantId, createdAt])
+}
+
+model Product {
+  id                   String   @id @default(uuid())
+  // Stable public id, e.g. "fresh-tomato". Safe to put in a URL.
+  productId            String   @unique
+  name                 String
+  image                String
+  category             String
+  // Matches a SubCategory.slug in the client's catalogue config.
+  subCategory          String
+  // Fixed-pack price and stock — only when there are no variants.
+  price                Decimal? @db.Decimal(10, 2)
+  stockCount           Int?
+  pack                 String?
+  origin               String?
+  useFor               String?
+  // Rx items never go straight to the cart.
+  requiresPrescription Boolean  @default(false)
+  merchantId           String?
+  isActive             Boolean  @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  merchant Merchant?        @relation(fields: [merchantId], references: [id])
+  variants ProductVariant[]
+
+  // The category pages read by aisle, then by shelf.
+  @@index([category, subCategory, isActive])
+  @@index([merchantId])
+}
+
+model ProductVariant {
+  id         String  @id @default(uuid())
+  productRef String
+  // Stable within a product, e.g. "500g". Not unique across products.
+  variantId  String
+  label      String
+  price      Decimal @db.Decimal(10, 2)
+  stockCount Int     @default(0)
+  // Keeps the order the merchant listed the sizes in.
+  position   Int     @default(0)
+
+  product Product @relation(fields: [productRef], references: [id], onDelete: Cascade)
+
+  @@unique([productRef, variantId])
+}
+
+// Food is ordered from a kitchen, so the Food aisle lists restaurants rather
+// than products: a kitchen is open or it is not, it has no stock counts.
+model Restaurant {
+  id              String   @id @default(uuid())
+  restaurantId    String   @unique
+  name            String
+  image           String
+  cuisine         String
+  rating          Decimal  @db.Decimal(2, 1)
+  ratingCount     Int      @default(0)
+  // Typical kitchen time in minutes, before delivery.
+  prepMinutes     Int
+  priceForTwo     Decimal  @db.Decimal(10, 2)
+  isOpen          Boolean  @default(false)
+  signatureDishes String[]
+  merchantId      String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  merchant Merchant? @relation(fields: [merchantId], references: [id])
+
+  @@index([merchantId])
+}
+
+model Order {
+  id             String    @id @default(uuid())
+  // The short number people say out loud ("#1039"). Sequential across all orders.
+  number         Int       @unique @default(autoincrement())
+  customerId     String
+  // One order per merchant: a mixed cart is split at checkout so each shop
+  // sees and fulfils only its own items. Null for unclaimed demo stock.
+  merchantId     String?
+  // Set when a driver accepts the delivery; null until then.
+  driverId       String?
+  // What the driver earns for this drop.
+  driverPayout   Decimal   @default(0) @db.Decimal(10, 2)
+  readyAt        DateTime?
+  deliveredAt    DateTime?
+  // Delivery address at order time — a snapshot, not a link to the saved
+  // address: that may be edited or deleted after the order.
+  addressLabel   String
+  addressLine1   String
+  addressCity    String
+  addressState   String
+  addressPincode String
+  paymentMethod  String
+  total          Decimal   @db.Decimal(12, 2)
+  // placed → accepted → packing → ready → out_for_delivery → delivered, or
+  // rejected. The merchant owns up to ready, the driver the rest.
+  status         String    @default("placed")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  customer Customer    @relation(fields: [customerId], references: [id])
+  merchant Merchant?   @relation(fields: [merchantId], references: [id])
+  driver   Driver?     @relation(fields: [driverId], references: [id])
+  items    OrderItem[]
+
+  @@index([customerId])
+  @@index([merchantId, status])
+  @@index([driverId, status])
+  // The admin order list reads newest-first.
+  @@index([createdAt(sort: Desc)])
+}
+
+// A snapshot at purchase time, deliberately not a Product relation: a
+// product's price or name changing later must not rewrite past orders.
+model OrderItem {
+  id         String  @id @default(uuid())
+  orderId    String
+  productId  String
+  variantId  String?
+  name       String
+  price      Decimal @db.Decimal(10, 2)
+  quantity   Int
+  merchantId String?
+
+  order    Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  merchant Merchant? @relation(fields: [merchantId], references: [id])
+
+  @@index([orderId])
+  @@index([merchantId])
+}
